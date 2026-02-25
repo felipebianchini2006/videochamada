@@ -1,0 +1,28 @@
+{
+  "name": "webrtc-1x1-integration-package",
+  "version": "1.0.0",
+  "description": "Pacote de integracao WebRTC 1:1 com Express + Socket.io e Coturn",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": [
+    "webrtc",
+    "socket.io",
+    "express",
+    "coturn",
+    "videochamada"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@socket.io/redis-adapter": "^8.3.0",
+    "dotenv": "^16.4.7",
+    "ejs": "^3.1.10",
+    "express": "^4.21.2",
+    "redis": "^4.7.0",
+    "socket.io": "^4.8.1",
+    "uuid": "^11.0.5"
+  }
+}
