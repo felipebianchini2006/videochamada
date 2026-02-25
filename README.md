@@ -44,6 +44,44 @@ node -e "console.log(require('node:crypto').randomUUID())"
 5. Acesse:
 `http://localhost:3000/call/<uuid-v4>`
 
+## Testes automatizados (comprovação de funcionamento)
+1. Instale dependências:
+```bash
+npm install
+```
+2. Rode a suíte de integração:
+```bash
+npm test
+```
+3. Rode o teste de carga padrão (300 salas 1:1):
+```bash
+npm run test:load
+```
+
+### O que os testes cobrem
+- `tests/http.integration.test.js`
+  - `GET /healthz` retorna `status=ok`
+  - validação de `roomId` em `/call/:roomId`
+  - retorno de `ice-config` com STUN + TURN efêmero
+- `tests/socket.integration.test.js`
+  - limite 1:1 com bloqueio do 3º usuário (`room:full`)
+  - isolamento de salas (sem cross-talk) em `webrtc:offer`
+  - propagação de `media:state` para o par correto
+  - evento `room:peer-left` ao desconectar
+  - proteção de signaling com `NOT_IN_ROOM`
+- `tests/load/signaling-load.js`
+  - simulação de 300 salas com 2 participantes/sala
+  - validação de conexão e isolamento de signaling por sala
+
+### Parâmetros opcionais do load test
+```bash
+LOAD_ROOMS=300 LOAD_BATCH_SIZE=30 LOAD_EVENT_TIMEOUT_MS=5000 npm run test:load
+```
+No PowerShell:
+```powershell
+$env:LOAD_ROOMS=300; $env:LOAD_BATCH_SIZE=30; $env:LOAD_EVENT_TIMEOUT_MS=5000; npm run test:load
+```
+
 ## Contratos públicos
 
 ### HTTP
