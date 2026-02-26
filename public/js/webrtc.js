@@ -42,13 +42,14 @@
   let iceConfig = null;
   let hasJoinedRoom = false;
   let isLeaving = false;
+  let startedWithoutCamera = false;
   let remoteMediaStatus = {
     audioEnabled: true,
     videoEnabled: true
   };
 
   if (!roomId) {
-    setFeedback('roomId ausente na página. Reabra o link da chamada.', 'danger');
+    setFeedback('roomId ausente na pagina. Reabra o link da chamada.', 'danger');
     disableControls();
     return;
   }
@@ -64,14 +65,20 @@
       throw new Error('Navegador sem suporte completo para getUserMedia.');
     }
 
-    setFeedback('Solicitando permissões de câmera e microfone...', 'secondary');
+    setFeedback('Solicitando permissoes de camera e microfone...', 'secondary');
 
     const [fetchedIceConfig, stream] = await Promise.all([fetchIceConfig(), startLocalMedia()]);
     iceConfig = fetchedIceConfig;
     localStream = stream;
+    syncMediaStateFromLocalTracks();
     localVideoEl.srcObject = localStream;
 
-    setFeedback('Conectando à sala de atendimento...', 'secondary');
+    if (startedWithoutCamera) {
+      setFeedback('Camera nao encontrada. Entrando na chamada apenas com microfone.', 'warning');
+    } else {
+      setFeedback('Conectando a sala de atendimento...', 'secondary');
+    }
+
     initSocket();
     updateControlLabels();
     updateRemotePlaceholder();
@@ -85,7 +92,7 @@
 
     if (!response.ok) {
       const errorBody = await safeJson(response);
-      throw new Error(errorBody.message || 'Não foi possível carregar configuração ICE.');
+      throw new Error(errorBody.message || 'Nao foi possivel carregar configuracao ICE.');
     }
 
     return response.json();
@@ -96,10 +103,42 @@
       return await navigator.mediaDevices.getUserMedia(MEDIA_CONSTRAINTS);
     } catch (error) {
       if (error && error.name === 'NotAllowedError') {
-        throw new Error('Permissão negada para câmera/microfone.');
+        throw new Error('Permissao negada para camera/microfone.');
       }
+
+      if (canFallbackToAudioOnly(error)) {
+        try {
+          const audioOnlyStream = await navigator.mediaDevices.getUserMedia({
+            audio: MEDIA_CONSTRAINTS.audio,
+            video: false
+          });
+          startedWithoutCamera = true;
+          return audioOnlyStream;
+        } catch (fallbackError) {
+          if (fallbackError && fallbackError.name === 'NotAllowedError') {
+            throw new Error('Permissao negada para microfone.');
+          }
+          throw fallbackError;
+        }
+      }
+
       throw error;
     }
+  }
+
+  function canFallbackToAudioOnly(error) {
+    if (!error || !error.name) {
+      return false;
+    }
+
+    return [
+      'NotFoundError',
+      'DevicesNotFoundError',
+      'OverconstrainedError',
+      'ConstraintNotSatisfiedError',
+      'NotReadableError',
+      'TrackStartError'
+    ].includes(error.name);
   }
 
   function initSocket() {
@@ -122,24 +161,39 @@
       }
 
       setConnectionStatus('Desconectado', 'danger');
-      setFeedback(`Conexão de sinalização encerrada (${reason}).`, 'warning');
+      setFeedback(`Conexao de sinalizacao encerrada (${reason}).`, 'warning');
     });
 
     socket.on('room:joined', async ({ participantCount }) => {
       hasJoinedRoom = true;
+      emitMediaState();
+
       if (participantCount === 1) {
         setConnectionStatus('Aguardando participante', 'secondary');
-        setFeedback('Você entrou na sala. Aguardando o participante...', 'secondary');
+        if (startedWithoutCamera) {
+          setFeedback('Voce entrou sem camera. Aguardando o participante...', 'warning');
+        } else {
+          setFeedback('Voce entrou na sala. Aguardando o participante...', 'secondary');
+        }
       } else {
-        setConnectionStatus('Sincronizando mídia', 'warning');
-        setFeedback('Participante detectado. Iniciando conexão WebRTC...', 'warning');
+        setConnectionStatus('Sincronizando midia', 'warning');
+        if (startedWithoutCamera) {
+          setFeedback('Participante detectado. Voce esta em audio apenas (sem camera).', 'warning');
+        } else {
+          setFeedback('Participante detectado. Iniciando conexao WebRTC...', 'warning');
+        }
         await createAndSendOffer();
       }
     });
 
     socket.on('room:peer-joined', () => {
       setConnectionStatus('Participante conectado', 'success');
-      setFeedback('Participante entrou na sala.', 'success');
+      if (startedWithoutCamera) {
+        setFeedback('Participante entrou. Avisando que voce esta sem camera.', 'warning');
+      } else {
+        setFeedback('Participante entrou na sala.', 'success');
+      }
+      emitMediaState();
     });
 
     socket.on('room:peer-left', () => {
@@ -151,7 +205,7 @@
 
     socket.on('room:full', () => {
       setConnectionStatus('Sala cheia', 'danger');
-      setFeedback('Esta sala já está com 2 participantes.', 'danger');
+      setFeedback('Esta sala ja esta com 2 participantes.', 'danger');
       isLeaving = true;
 
       if (socket && socket.connected) {
@@ -253,13 +307,13 @@
     peerConnection.onconnectionstatechange = () => {
       if (peerConnection.connectionState === 'connected') {
         setConnectionStatus('Chamada ativa', 'success');
-        setFeedback('Conexão WebRTC estabelecida.', 'success');
+        setFeedback('Conexao WebRTC estabelecida.', 'success');
       } else if (peerConnection.connectionState === 'disconnected') {
-        setConnectionStatus('Reconectando mídia', 'warning');
-        setFeedback('Conexão de mídia interrompida. Tentando recuperar...', 'warning');
+        setConnectionStatus('Reconectando midia', 'warning');
+        setFeedback('Conexao de midia interrompida. Tentando recuperar...', 'warning');
       } else if (peerConnection.connectionState === 'failed') {
-        setConnectionStatus('Falha na mídia', 'danger');
-        setFeedback('Falha na conexão de mídia. Verifique TURN e rede.', 'danger');
+        setConnectionStatus('Falha na midia', 'danger');
+        setFeedback('Falha na conexao de midia. Verifique TURN e rede.', 'danger');
       }
     };
 
@@ -291,6 +345,11 @@
         return;
       }
 
+      if (!hasAudioTrack(localStream)) {
+        setFeedback('Microfone nao encontrado neste dispositivo.', 'warning');
+        return;
+      }
+
       mediaState.audioEnabled = !mediaState.audioEnabled;
       localStream.getAudioTracks().forEach((track) => {
         track.enabled = mediaState.audioEnabled;
@@ -302,6 +361,14 @@
 
     toggleVideoBtn.addEventListener('click', () => {
       if (!localStream) {
+        return;
+      }
+
+      if (!hasVideoTrack(localStream)) {
+        mediaState.videoEnabled = false;
+        updateControlLabels();
+        emitMediaState();
+        setFeedback('Camera nao encontrada. Voce esta em audio apenas.', 'warning');
         return;
       }
 
@@ -319,14 +386,18 @@
         return;
       }
 
-      mediaState.audioEnabled = true;
-      mediaState.videoEnabled = true;
-      localStream.getAudioTracks().forEach((track) => {
+      const audioTracks = localStream.getAudioTracks();
+      const videoTracks = localStream.getVideoTracks();
+
+      audioTracks.forEach((track) => {
         track.enabled = true;
       });
-      localStream.getVideoTracks().forEach((track) => {
+      videoTracks.forEach((track) => {
         track.enabled = true;
       });
+
+      mediaState.audioEnabled = audioTracks.length > 0;
+      mediaState.videoEnabled = videoTracks.length > 0;
 
       updateControlLabels();
       emitMediaState();
@@ -361,11 +432,48 @@
   }
 
   function updateControlLabels() {
-    toggleAudioBtn.textContent = mediaState.audioEnabled ? 'Mic ligado' : 'Mic desligado';
-    toggleVideoBtn.textContent = mediaState.videoEnabled ? 'Câmera ligada' : 'Câmera desligada';
+    const hasAudio = hasAudioTrack(localStream);
+    const hasVideo = hasVideoTrack(localStream);
 
-    toggleAudioBtn.classList.toggle('active-off', !mediaState.audioEnabled);
-    toggleVideoBtn.classList.toggle('active-off', !mediaState.videoEnabled);
+    if (hasAudio) {
+      toggleAudioBtn.textContent = mediaState.audioEnabled ? 'Mic ligado' : 'Mic desligado';
+      toggleAudioBtn.disabled = false;
+      toggleAudioBtn.classList.toggle('active-off', !mediaState.audioEnabled);
+    } else {
+      toggleAudioBtn.textContent = 'Sem microfone';
+      toggleAudioBtn.disabled = true;
+      toggleAudioBtn.classList.add('active-off');
+    }
+
+    if (hasVideo) {
+      toggleVideoBtn.textContent = mediaState.videoEnabled ? 'Camera ligada' : 'Camera desligada';
+      toggleVideoBtn.disabled = false;
+      toggleVideoBtn.classList.toggle('active-off', !mediaState.videoEnabled);
+    } else {
+      toggleVideoBtn.textContent = 'Sem camera';
+      toggleVideoBtn.disabled = true;
+      toggleVideoBtn.classList.add('active-off');
+    }
+
+    enableAllBtn.disabled = !hasAudio && !hasVideo;
+  }
+
+  function hasAudioTrack(stream) {
+    return Boolean(stream && stream.getAudioTracks().length > 0);
+  }
+
+  function hasVideoTrack(stream) {
+    return Boolean(stream && stream.getVideoTracks().length > 0);
+  }
+
+  function syncMediaStateFromLocalTracks() {
+    mediaState.audioEnabled = hasAudioTrack(localStream)
+      ? localStream.getAudioTracks().some((track) => track.enabled)
+      : false;
+
+    mediaState.videoEnabled = hasVideoTrack(localStream)
+      ? localStream.getVideoTracks().some((track) => track.enabled)
+      : false;
   }
 
   function updateRemoteMediaState() {
@@ -374,7 +482,7 @@
       messages.push('Participante com microfone desligado');
     }
     if (!remoteMediaStatus.videoEnabled) {
-      messages.push('Participante com câmera desligada');
+      messages.push('Participante com camera desligada');
     }
 
     if (messages.length === 0) {
@@ -445,8 +553,8 @@
     resetRemoteMedia();
     disableControls();
 
-    setConnectionStatus('Sessão encerrada', 'secondary');
-    setFeedback('Você saiu da chamada.', 'secondary');
+    setConnectionStatus('Sessao encerrada', 'secondary');
+    setFeedback('Voce saiu da chamada.', 'secondary');
   }
 
   function disableControls() {
@@ -470,7 +578,7 @@
     const message = error && error.message ? error.message : 'Erro inesperado ao iniciar chamada.';
     stopLocalTracks();
     resetRemoteMedia();
-    setConnectionStatus('Erro na inicialização', 'danger');
+    setConnectionStatus('Erro na inicializacao', 'danger');
     setFeedback(message, 'danger');
     disableControls();
   }
